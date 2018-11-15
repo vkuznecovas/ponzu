@@ -10,35 +10,51 @@ import (
 	"path/filepath"
 )
 
+func IsSymlink(dir string) (isLink bool, linkDest string, err error) {
+	a, err := filepath.Abs(dir)
+	if err != nil {
+		return false, dir, err
+	}
+	info, err := os.Lstat(a)
+	if err != nil {
+		return false, dir, err
+	}
+	if info.Mode()&os.ModeSymlink == os.ModeSymlink {
+		// This is a symlink - we need to follow it
+		bdir, err := os.Readlink(a)
+		if err != nil {
+			return true, dir, err
+		}
+		linkDest = bdir
+		isLink = true
+	}
+	return
+}
+
 // ArchiveFS walks the filesystem starting from basedir writing files encountered
 // tarred and gzipped to the provided writer
 func ArchiveFS(ctx context.Context, basedir string, w io.Writer) error {
 	gz := gzip.NewWriter(w)
 	tarball := tar.NewWriter(gz)
-
-	absPath, err := filepath.Abs(basedir)
+	link, bdir, err := IsSymlink(basedir)
 	if err != nil {
 		return err
 	}
-
-	info, err := os.Lstat(absPath)
-	if err != nil {
-		return err
-	}
-
-	if info.Mode()&os.ModeSymlink == os.ModeSymlink {
-		// This is a symlink - we need to follow it
-		bdir, err := os.Readlink(absPath)
-		if err != nil {
-			return err
-		}
+	if link {
 		basedir = bdir
 	}
-
 	errChan := make(chan error, 1)
 	walkFn := func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
+		}
+
+		isLink, _, err := IsSymlink(path)
+		if err != nil {
+			return err
+		}
+		if isLink {
+			return nil
 		}
 
 		hdr, err := tar.FileInfoHeader(info, "")
